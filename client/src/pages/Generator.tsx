@@ -1,8 +1,27 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useState } from 'react';
 import Button from '../components/ui/Button';
 import Slider from '../components/ui/Slider';
 import { useHandwritingStore } from '../stores/handwritingStore';
 import { useToastStore } from '../stores/toastStore';
+
+// Predefined styles from calligrapher model (0-14)
+const PREDEFINED_STYLES = [
+  { id: 0, name: 'Classic' },
+  { id: 1, name: 'Neat Print' },
+  { id: 2, name: 'Casual' },
+  { id: 3, name: 'Elegant Cursive' },
+  { id: 4, name: 'Quick Notes' },
+  { id: 5, name: 'Formal' },
+  { id: 6, name: 'Relaxed' },
+  { id: 7, name: 'Artistic' },
+  { id: 8, name: 'Modern' },
+  { id: 9, name: 'Traditional' },
+  { id: 10, name: 'Compact' },
+  { id: 11, name: 'Flowing' },
+  { id: 12, name: 'Bold' },
+  { id: 13, name: 'Light Touch' },
+  { id: 14, name: 'Signature' },
+];
 
 type PaperBg = 'plain' | 'lined' | 'cream' | 'dark';
 
@@ -17,49 +36,32 @@ const Generator: React.FC = () => {
   const [text, setText] = useState('The quick brown fox jumps over the lazy dog.');
   const [paperBg, setPaperBg] = useState<PaperBg>('lined');
   const [zoom, setZoom] = useState(100);
+  const [selectedStyleId, setSelectedStyleId] = useState<number>(0);
 
   const {
-    styles,
-    activeStyleId,
-    setActiveStyleId,
     generatedSVG,
     isGenerating,
     generateHandwriting,
+    checkMLService,
+    mlServiceStatus,
     sliderSettings,
     setSliderSettings,
-    fetchStyles,
-    isLoadingStyles,
   } = useHandwritingStore();
   const addToast = useToastStore((s) => s.addToast);
 
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
-
   useEffect(() => {
-    fetchStyles();
-  }, [fetchStyles]);
-
-  const debouncedGenerate = useCallback(
-    (newText: string) => {
-      clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(() => {
-        if (newText.trim() && activeStyleId) {
-          generateHandwriting(newText).catch((err: any) =>
-            addToast(err.message || 'Generation failed', 'error')
-          );
-        }
-      }, 400);
-    },
-    [activeStyleId, generateHandwriting, addToast]
-  );
+    checkMLService().catch(() => {
+      // Store handles unhealthy state; UI messaging happens on generate.
+    });
+  }, [checkMLService]);
 
   const handleTextChange = (val: string) => {
     setText(val);
-    debouncedGenerate(val);
   };
 
   const handleSliderChange = (key: string, value: number) => {
     setSliderSettings({ [key]: value });
-    debouncedGenerate(text);
+    // Don't auto-regenerate on slider change - user clicks Generate when ready
   };
 
   const handleExport = (format: 'png' | 'pdf' | 'svg') => {
@@ -76,11 +78,7 @@ const Generator: React.FC = () => {
       addToast('Please enter some text', 'error');
       return;
     }
-    if (!activeStyleId) {
-      addToast('Please select a style first', 'error');
-      return;
-    }
-    generateHandwriting(text).catch((err: any) =>
+    generateHandwriting(text, selectedStyleId).catch((err: any) =>
       addToast(err.message || 'Generation failed', 'error')
     );
   };
@@ -113,30 +111,18 @@ const Generator: React.FC = () => {
             {/* Style selector */}
             <div className="bg-paper-card border border-border rounded-2xl p-5">
               <label className="block text-sm font-medium text-ink mb-2">Handwriting style</label>
-              {isLoadingStyles ? (
-                <div className="h-10 skeleton rounded-xl" />
-              ) : styles.length === 0 ? (
-                <p className="text-sm text-ink-muted py-2">
-                  No styles yet.{' '}
-                  <a href="/onboarding" className="text-accent hover:underline">
-                    Create one
-                  </a>
-                </p>
-              ) : (
-                <select
-                  value={activeStyleId || ''}
-                  onChange={(e) => setActiveStyleId(e.target.value || null)}
-                  aria-label="Handwriting style"
-                  className="w-full px-4 py-2.5 rounded-xl border border-border bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
-                >
-                  <option value="">Select a style</option>
-                  {styles.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              )}
+              <select
+                value={selectedStyleId}
+                onChange={(e) => setSelectedStyleId(Number(e.target.value))}
+                aria-label="Handwriting style"
+                className="w-full px-4 py-2.5 rounded-xl border border-border bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
+              >
+                {PREDEFINED_STYLES.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
             </div>
 
             {/* Sliders */}
@@ -182,6 +168,11 @@ const Generator: React.FC = () => {
 
             {/* Generate + Export */}
             <div className="flex flex-col gap-3">
+              {mlServiceStatus === 'warming' && (
+                <p className="text-xs text-ink-muted">
+                  Preparing AI model in background for faster generation...
+                </p>
+              )}
               <Button className="w-full" size="lg" onClick={handleGenerate} isLoading={isGenerating}>
                 Generate
               </Button>
@@ -262,7 +253,11 @@ const Generator: React.FC = () => {
                     </div>
                   ) : generatedSVG ? (
                     <div
-                      className={`${paper.text} animate-fade-in`}
+                      className={`${paper.text} animate-fade-in [&>svg]:w-full [&>svg]:h-auto [&>svg]:max-w-full`}
+                      style={{ 
+                        paddingLeft: '20px',
+                        paddingTop: '30px',
+                      }}
                       dangerouslySetInnerHTML={{ __html: generatedSVG }}
                     />
                   ) : (

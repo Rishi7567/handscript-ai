@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import axios from 'axios';
 
-const api = axios.create({ baseURL: 'http://localhost:5000' });
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const api = axios.create({ baseURL: API_BASE });
 
 export interface CharSample {
   char: string;
@@ -32,6 +33,7 @@ interface HandwritingState {
   isGenerating: boolean;
   isBuildingStyle: boolean;
   isLoadingStyles: boolean;
+  mlServiceStatus: 'unknown' | 'warming' | 'healthy' | 'unhealthy';
   sliderSettings: SliderSettings;
   addSample: (sample: CharSample) => void;
   removeSample: (char: string) => void;
@@ -41,8 +43,9 @@ interface HandwritingState {
   buildStyle: (name: string) => Promise<void>;
   fetchStyles: () => Promise<void>;
   deleteStyle: (id: string) => Promise<void>;
-  generateHandwriting: (text: string) => Promise<void>;
+  generateHandwriting: (text: string, styleId?: number) => Promise<void>;
   clearGenerated: () => void;
+  checkMLService: () => Promise<void>;
 }
 
 function isGuestMode(): boolean {
@@ -118,6 +121,7 @@ export const useHandwritingStore = create<HandwritingState>((set, get) => ({
   isGenerating: false,
   isBuildingStyle: false,
   isLoadingStyles: false,
+  mlServiceStatus: 'unknown',
 
   sliderSettings: {
     slant: 0,
@@ -125,6 +129,26 @@ export const useHandwritingStore = create<HandwritingState>((set, get) => ({
     spacing: 50,
     inkWeight: 50,
     naturalness: 50,
+  },
+
+  checkMLService: async () => {
+    try {
+      const { data } = await api.get('/api/handwriting/health');
+      const state = data?.models_loaded?.calligrapher_state;
+      if (state === 'ready') {
+        set({ mlServiceStatus: 'healthy' });
+      } else if (state === 'warming') {
+        set({ mlServiceStatus: 'warming' });
+      } else {
+        set({ mlServiceStatus: data.status === 'healthy' ? 'healthy' : 'unhealthy' });
+      }
+
+      if (state !== 'ready') {
+        await api.post('/api/handwriting/warmup');
+      }
+    } catch {
+      set({ mlServiceStatus: 'unhealthy' });
+    }
   },
 
   addSample: (sample) => {
@@ -240,28 +264,43 @@ export const useHandwritingStore = create<HandwritingState>((set, get) => ({
     }
   },
 
-  generateHandwriting: async (text) => {
+  generateHandwriting: async (text, styleId = 0) => {
     set({ isGenerating: true });
 
-    if (isGuestMode()) {
-      await new Promise((r) => setTimeout(r, 600));
-      const { sliderSettings } = get();
-      const svg = generateDemoSVG(text, sliderSettings);
-      set({ generatedSVG: svg, isGenerating: false });
-      return;
-    }
+    const { sliderSettings } = get();
+    // Convert naturalness (0-100) to bias (0.5-1.0 range)
+    const bias = 0.5 + (sliderSettings.naturalness / 200);
 
     try {
-      const { activeStyleId, sliderSettings } = get();
-      const token = getToken();
-      const { data } = await api.post(
-        '/api/generate',
-        { text, styleId: activeStyleId, settings: sliderSettings },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      set({ generatedSVG: data.svg, isGenerating: false });
+      await get().checkMLService();
+
+      // Send all slider settings to ML service
+      const { data } = await api.post('/api/handwriting/generate', {
+        text,
+        style_id: styleId,
+        bias,
+        slant: sliderSettings.slant,
+        size: sliderSettings.size,
+        spacing: sliderSettings.spacing,
+        ink_weight: sliderSettings.inkWeight,
+      });
+      
+      if (data.status === 'success' && data.svg) {
+        set({ generatedSVG: data.svg, isGenerating: false });
+      } else {
+        throw new Error(data.error || 'Generation failed');
+      }
     } catch (error: unknown) {
       set({ isGenerating: false });
+      
+      // Fallback to demo SVG if ML service unavailable
+      if (axios.isAxiosError(error) && !error.response) {
+        console.warn('ML service unavailable, using fallback');
+        const svg = generateDemoSVG(text, sliderSettings);
+        set({ generatedSVG: svg, isGenerating: false });
+        return;
+      }
+      
       const msg = error instanceof Error ? error.message : 'Failed to generate';
       throw new Error(msg);
     }

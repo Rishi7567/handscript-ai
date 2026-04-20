@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
+import handwritingRoutes from './routes/handwriting';
 
 dotenv.config();
 
@@ -16,13 +17,13 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// MongoDB connection
+// MongoDB connection (optional - continues without DB if unavailable)
 const connectDB = async () => {
   const mongoUri = process.env.MONGODB_URI;
   
   if (!mongoUri) {
-    console.error('MONGODB_URI is not defined in environment variables');
-    process.exit(1);
+    console.warn('MONGODB_URI not defined - running without database');
+    return;
   }
 
   try {
@@ -32,8 +33,7 @@ const connectDB = async () => {
     });
     console.log('MongoDB connected successfully');
   } catch (error) {
-    console.error('MongoDB connection error:', error);
-    process.exit(1);
+    console.warn('MongoDB connection failed - running without database:', (error as Error).message);
   }
 };
 
@@ -51,6 +51,9 @@ app.get('/api/health', (_req, res) => {
   const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
   res.json({ status: 'ok', database: dbStatus });
 });
+
+// Handwriting API routes (connects to Python ML service)
+app.use('/api/handwriting', handwritingRoutes);
 
 // Start server
 const startServer = async () => {

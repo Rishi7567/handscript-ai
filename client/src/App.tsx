@@ -23,19 +23,13 @@ function App() {
         <Routes>
           <Route path="/" element={<Landing />} />
           <Route path="/auth-callback" element={<AuthCallback />} />
+          {/* Generator accessible without auth for testing ML service */}
+          <Route path="/generator" element={<Generator />} />
           <Route
             path="/onboarding"
             element={
               <ProtectedRoute>
                 <Onboarding />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/generator"
-            element={
-              <ProtectedRoute>
-                <Generator />
               </ProtectedRoute>
             }
           />

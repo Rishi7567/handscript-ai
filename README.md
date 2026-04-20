@@ -19,7 +19,7 @@ A web app that lets you digitize your own handwriting using AI. You provide hand
 ## Setup
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/handscript-ai.git
+git clone https://github.com/Rishi7567/handscript-ai.git
 cd handscript-ai
 npm install
 cd client && npm install
@@ -31,6 +31,17 @@ Copy `server/.env.example` to `server/.env` and fill in your values, then:
 ```bash
 npm run dev
 ```
+
+## Handwriting generation performance
+
+The Python handwriting service supports warmup and sampling controls:
+
+- `CALLIGRAPHER_PRELOAD_MODE`: `off`, `async` (default), or `sync`
+- `CALLIGRAPHER_STEP_MULTIPLIER`: generation step multiplier (default `20`, lower is faster)
+- `CALLIGRAPHER_MIN_TSTEPS`: minimum sampling steps (default `220`)
+- `CALLIGRAPHER_MAX_TSTEPS`: maximum sampling steps (default `1200`)
+
+Using `async` preload keeps startup responsive while warming the model in background.
 
 ## License
 
