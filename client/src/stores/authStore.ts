@@ -22,7 +22,8 @@ interface AuthState {
   logout: () => void;
 }
 
-const api = axios.create({ baseURL: 'http://localhost:5000' });
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const api = axios.create({ baseURL: API_BASE });
 
 export const useAuthStore = create<AuthState>()(
   persist(
@@ -67,7 +68,7 @@ export const useAuthStore = create<AuthState>()(
       },
 
       loginWithGoogle: () => {
-        window.location.href = 'http://localhost:5000/api/auth/google';
+        window.location.href = `${API_BASE}/api/auth/google`;
       },
 
       loginAsGuest: () => {
