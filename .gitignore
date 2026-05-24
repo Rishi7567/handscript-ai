@@ -27,3 +27,21 @@ desktop.ini
 # Logs
 *.log
 npm-debug.log*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# TypeScript build info
+*.tsbuildinfo
+
+# ML model weights (too large for git)
+server/ml-models/calligrapher/
+server/ml-models/hwt/
+
+# Personal files - do not commit
+Resume.pdf
+Everything.txt
+complete_project_analysis.md.resolved
+Handscript_project_analysis
