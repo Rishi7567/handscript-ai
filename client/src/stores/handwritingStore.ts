@@ -201,7 +201,7 @@ export const useHandwritingStore = create<HandwritingState>((set, get) => ({
       const { samples } = get();
       const token = getToken();
       const { data } = await api.post(
-        '/api/styles/build',
+        '/api/handwriting/styles/build',
         { name, samples },
         { headers: { Authorization: `Bearer ${token}` } }
       );
