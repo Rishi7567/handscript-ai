@@ -14,7 +14,7 @@
 
 **Type any text → Get realistic AI-generated handwriting → Export as PNG, PDF, or SVG**
 
-[Features](#-features) · [Architecture](#-architecture) · [Quick Start](#-quick-start) · [API Reference](#-api-reference) · [Configuration](#%EF%B8%8F-configuration)
+[Features](#-features) · [Architecture](#-architecture) · [Quick Start](#-quick-start) · [API Reference](#-api-reference)
 
 </div>
 
@@ -286,53 +286,6 @@ handscript-ai/
 ├── LICENSE                              # MIT
 └── README.md
 ```
-
----
-
-## ⚙️ Configuration
-
-### Environment Variables
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `PORT` | No | `5000` | Express server port |
-| `MONGODB_URI` | No | - | MongoDB Atlas connection string |
-| `JWT_SECRET` | No | - | Secret for JWT token signing |
-| `GOOGLE_CLIENT_ID` | No | - | Google OAuth client ID |
-| `GOOGLE_CLIENT_SECRET` | No | - | Google OAuth client secret |
-| `GOOGLE_CALLBACK_URL` | No | `http://localhost:5000/api/auth/google/callback` | OAuth redirect URI |
-| `CLIENT_URL` | No | `http://localhost:5173` | Frontend URL for CORS |
-| `VITE_API_URL` | No | `http://localhost:5000` | Backend URL (set in client) |
-
-### ML Service Performance Tuning
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CALLIGRAPHER_PRELOAD_MODE` | `async` | Model loading: `off`, `async`, or `sync` |
-| `CALLIGRAPHER_STEP_MULTIPLIER` | `20` | Generation step multiplier (lower = faster) |
-| `CALLIGRAPHER_MIN_TSTEPS` | `220` | Minimum sampling steps |
-| `CALLIGRAPHER_MAX_TSTEPS` | `1200` | Maximum sampling steps |
-| `ML_SERVICE_PORT` | `8001` | Python service port |
-| `ML_SERVICE_HOST` | `127.0.0.1` | Python service host |
-
-> **Performance tip:** Using `async` preload keeps startup responsive while warming the model in the background. First generation takes ~5s, subsequent calls take ~2s.
-
----
-
-## 🗺️ Roadmap
-
-- [x] Calligrapher.ai TF1 → TF2 migration
-- [x] Python FastAPI ML bridge service
-- [x] Express API proxy layer
-- [x] Frontend generator with 15 styles & sliders
-- [x] Canvas-based letter drawing (Onboarding)
-- [x] PNG, PDF, SVG export
-- [x] Style library (save/manage/delete)
-- [ ] MongoDB user accounts & persistence
-- [ ] Full HWT inference pipeline (image → custom style)
-- [ ] Hybrid rendering (fast glyph compositor + ML for style creation)
-- [ ] Production deployment (Vercel + Railway/Render)
-- [ ] Realism post-processing (pressure, wobble, ink variation)
 
 ---
 
