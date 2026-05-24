@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Button from '../components/ui/Button';
 import Slider from '../components/ui/Slider';
 import { useHandwritingStore } from '../stores/handwritingStore';
@@ -64,13 +64,72 @@ const Generator: React.FC = () => {
     // Don't auto-regenerate on slider change - user clicks Generate when ready
   };
 
-  const handleExport = (format: 'png' | 'pdf' | 'svg') => {
+  const previewRef = useRef<HTMLDivElement>(null);
+
+  const handleExport = async (format: 'png' | 'pdf' | 'svg') => {
     if (!generatedSVG) {
       addToast('Generate some text first', 'info');
       return;
     }
-    addToast(`Exporting as ${format.toUpperCase()}…`, 'info');
-    // In production this would call a backend endpoint or use jspdf/html2canvas
+
+    try {
+      if (format === 'svg') {
+        // SVG Export — download the raw SVG string directly
+        const blob = new Blob([generatedSVG], { type: 'image/svg+xml' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `handscript-${Date.now()}.svg`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        addToast('SVG exported successfully!', 'success');
+        return;
+      }
+
+      // PNG and PDF both need a canvas capture of the rendered preview
+      if (!previewRef.current) {
+        addToast('Preview not available', 'error');
+        return;
+      }
+
+      const html2canvas = (await import('html2canvas')).default;
+      const canvas = await html2canvas(previewRef.current, {
+        backgroundColor: paperBg === 'dark' ? '#2a2520' : paperBg === 'cream' ? '#f5f0e8' : '#ffffff',
+        scale: 2, // 2x resolution for crisp output
+        useCORS: true,
+      });
+
+      if (format === 'png') {
+        // PNG Export — convert canvas to PNG and download
+        const url = canvas.toDataURL('image/png');
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `handscript-${Date.now()}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        addToast('PNG exported successfully!', 'success');
+      } else if (format === 'pdf') {
+        // PDF Export — create a PDF page with the canvas image
+        const { jsPDF } = await import('jspdf');
+        const imgData = canvas.toDataURL('image/png');
+        const pdfWidth = canvas.width / 2; // Undo the 2x scale
+        const pdfHeight = canvas.height / 2;
+        const pdf = new jsPDF({
+          orientation: pdfWidth > pdfHeight ? 'landscape' : 'portrait',
+          unit: 'px',
+          format: [pdfWidth, pdfHeight],
+        });
+        pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+        pdf.save(`handscript-${Date.now()}.pdf`);
+        addToast('PDF exported successfully!', 'success');
+      }
+    } catch (err) {
+      console.error('Export failed:', err);
+      addToast('Export failed. Please try again.', 'error');
+    }
   };
 
   const handleGenerate = () => {
@@ -235,6 +294,7 @@ const Generator: React.FC = () => {
 
               {/* Paper preview */}
               <div
+                ref={previewRef}
                 className={`${paper.bg} border border-border rounded-2xl shadow-sm overflow-hidden min-h-[500px] transition-colors duration-300`}
               >
                 <div
