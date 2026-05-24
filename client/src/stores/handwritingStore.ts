@@ -229,7 +229,7 @@ export const useHandwritingStore = create<HandwritingState>((set, get) => ({
 
     try {
       const token = getToken();
-      const { data } = await api.get('/api/styles', {
+      const { data } = await api.get('/api/handwriting/styles', {
         headers: { Authorization: `Bearer ${token}` },
       });
       set({ styles: data.styles || [], isLoadingStyles: false });
@@ -251,7 +251,7 @@ export const useHandwritingStore = create<HandwritingState>((set, get) => ({
 
     try {
       const token = getToken();
-      await api.delete(`/api/styles/${id}`, {
+      await api.delete(`/api/handwriting/styles/${id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       set((state) => ({
