@@ -272,8 +272,6 @@ export const useHandwritingStore = create<HandwritingState>((set, get) => ({
     const bias = 0.5 + (sliderSettings.naturalness / 200);
 
     try {
-      await get().checkMLService();
-
       // Send all slider settings to ML service
       const { data } = await api.post('/api/handwriting/generate', {
         text,
