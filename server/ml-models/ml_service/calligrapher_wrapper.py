@@ -47,6 +47,38 @@ def get_hand():
     return _hand_instance
 
 
+def _apply_spacing_to_path(path_d: str, spacing_factor: float) -> str:
+    """
+    Parse an SVG path d-string and scale horizontal distances between
+    pen-up moves (M commands) to apply letter spacing.
+    
+    spacing_factor: 1.0 = no change, >1 = wider, <1 = tighter
+    """
+    if abs(spacing_factor - 1.0) < 0.01:
+        return path_d  # No change needed
+
+    # Tokenize: split into (command, x, y) triples
+    # Path format from calligrapher: "M0,0 Mx1,y1 Lx2,y2 Mx3,y3 ..."
+    tokens = re.findall(r'([ML])(-?[\d.]+),(-?[\d.]+)', path_d)
+    if len(tokens) < 2:
+        return path_d
+
+    # First pass: collect all X coords to find the leftmost X
+    all_x = [float(t[1]) for t in tokens]
+    x_min = min(all_x) if all_x else 0.0
+
+    # Second pass: rebuild path with scaled X positions
+    result_parts = []
+    for cmd, x_str, y_str in tokens:
+        x = float(x_str)
+        y = float(y_str)
+        # Scale horizontal distance from left edge
+        new_x = x_min + (x - x_min) * spacing_factor
+        result_parts.append(f"{cmd}{new_x:.1f},{y_str} ")
+
+    return ''.join(result_parts)
+
+
 def apply_svg_transforms(svg_content: str, slant: float, size: float, spacing: float) -> str:
     """Apply post-processing transforms to SVG for slant, size, and spacing."""
     
@@ -64,8 +96,21 @@ def apply_svg_transforms(svg_content: str, slant: float, size: float, spacing: f
     # Scale factor from size (100 = 1.0)
     scale = size / 100.0
     
+    # Spacing factor: 50 = default (1.0), 0 = tight (0.5), 100 = wide (1.5)
+    spacing_factor = 0.5 + (spacing / 100.0)
+    
+    # Apply spacing to each <path> d-attribute
+    modified_svg = svg_content
+    if abs(spacing_factor - 1.0) > 0.01:
+        def _replace_path_d(match):
+            d_value = match.group(1)
+            new_d = _apply_spacing_to_path(d_value, spacing_factor)
+            return f'd="{new_d}"'
+        modified_svg = re.sub(r'd="([^"]+)"', _replace_path_d, modified_svg)
+    
     # Calculate new viewBox dimensions (inverse scale to zoom)
-    new_width = vb_width / scale
+    # Also widen viewBox if spacing increased
+    new_width = (vb_width * spacing_factor) / scale
     new_height = vb_height / scale
     
     # Build transform for slant (skewX) - apply at content level
@@ -73,10 +118,7 @@ def apply_svg_transforms(svg_content: str, slant: float, size: float, spacing: f
     if abs(slant) > 0.1:
         transforms.append(f"skewX({-slant * 0.5})")
     
-    # Modify SVG with transforms
-    modified_svg = svg_content
-    
-    # Update viewBox for size scaling
+    # Update viewBox for size + spacing scaling
     modified_svg = re.sub(
         r'viewBox="[^"]+"',
         f'viewBox="0 0 {new_width:.1f} {new_height:.1f}"',

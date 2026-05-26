@@ -6,7 +6,7 @@ const ML_SERVICE_URL = process.env.ML_SERVICE_URL || 'http://127.0.0.1:8001';
 
 interface GenerateRequest {
   text: string;
-  style_id?: number;
+  style_id?: string | number;
   bias?: number;
   slant?: number;
   size?: number;

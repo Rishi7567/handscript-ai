@@ -73,7 +73,7 @@ router.post('/generate', async (req: Request, res: Response) => {
 
     const result = await mlService.generateHandwriting({
       text,
-      style_id: style_id ?? 0,
+      style_id: String(style_id ?? '0'),
       bias: bias ?? 0.75,
       slant: slant ?? 0,
       size: size ?? 100,

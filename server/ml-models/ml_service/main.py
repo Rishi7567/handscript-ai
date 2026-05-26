@@ -22,7 +22,8 @@ from calligrapher_wrapper import (
     get_model_state as get_calligrapher_model_state,
     get_preload_error as get_calligrapher_preload_error,
 )
-from hwt_wrapper import extract_style_from_image, load_style, list_styles, delete_style, build_style_from_samples
+from hwt_wrapper import extract_style_from_image, generate_hwt_handwriting, load_style, list_styles, delete_style, build_style_from_samples
+from compositor import compose_handwriting
 
 
 # Pydantic models for request/response
@@ -33,7 +34,7 @@ class BuildStyleRequest(BaseModel):
 
 class GenerateRequest(BaseModel):
     text: str = Field(..., description="Text to convert to handwriting")
-    style_id: int = Field(default=0, ge=0, le=14, description="Predefined style (0-14)")
+    style_id: str = Field(default="0", description="Style ID: 0-14 for predefined, custom_* for drawn, style_* for HWT")
     bias: float = Field(default=0.75, ge=0.0, le=1.0, description="Randomness (0=random, 1=deterministic)")
     stroke_color: str = Field(default="black", description="SVG stroke color")
     stroke_width: int = Field(default=2, ge=1, le=10, description="SVG stroke width")
@@ -139,20 +140,58 @@ async def generate(request: GenerateRequest):
     """
     Generate handwritten SVG from text.
     
-    Uses Calligrapher.ai model with predefined styles (0-14).
+    Dispatches to the appropriate backend:
+    - Numeric 0-14: Calligrapher.ai (LSTM model)
+    - custom_*: Glyph Compositor (user-drawn strokes)
+    - style_*: HWT Transformer (extracted style)
     """
     try:
+        t0 = time.perf_counter()
+        sid = request.style_id.strip()
+        lines_count = len(request.text.split('\n'))
+
+        # --- Route 1: Custom style (from onboarding canvas strokes) ---
+        if sid.startswith('custom_'):
+            style_data = load_style(sid)
+            if not style_data:
+                raise HTTPException(status_code=404, detail=f"Custom style {sid} not found")
+            samples = style_data.get('samples', [])
+            svg = compose_handwriting(
+                text=request.text,
+                samples=samples,
+                slant=request.slant,
+                size=request.size,
+                spacing=request.spacing,
+                ink_weight=request.ink_weight,
+                stroke_color=request.stroke_color,
+            )
+            duration_ms = round((time.perf_counter() - t0) * 1000, 2)
+            print(f"/generate [compositor] completed in {duration_ms}ms")
+            return {"svg": svg, "lines_count": lines_count, "status": "success"}
+
+        # --- Route 2: HWT extracted style ---
+        if sid.startswith('style_'):
+            svg = generate_hwt_handwriting(style_id=sid, text=request.text)
+            duration_ms = round((time.perf_counter() - t0) * 1000, 2)
+            print(f"/generate [hwt] completed in {duration_ms}ms")
+            return {"svg": svg, "lines_count": lines_count, "status": "success"}
+
+        # --- Route 3: Predefined Calligrapher.ai style (0-14) ---
+        try:
+            style_num = int(sid)
+        except ValueError:
+            style_num = 0
+        style_num = max(0, min(14, style_num))
+
         model_state = get_calligrapher_model_state()
         if model_state in {"idle", "error"}:
             preload_calligrapher_async()
 
-        t0 = time.perf_counter()
-        # Calculate stroke width from ink_weight (50 = default 2, range 1-4)
         stroke_width = max(1, min(4, 1 + int(request.ink_weight / 33)))
         
         svg = generate_handwriting(
             text=request.text,
-            style=request.style_id,
+            style=style_num,
             bias=request.bias,
             stroke_color=request.stroke_color,
             stroke_width=stroke_width,
@@ -161,9 +200,7 @@ async def generate(request: GenerateRequest):
             spacing=request.spacing
         )
         duration_ms = round((time.perf_counter() - t0) * 1000, 2)
-        print(f"/generate completed in {duration_ms}ms (model_state={get_calligrapher_model_state()})")
-        
-        lines_count = len(request.text.split('\n'))
+        print(f"/generate [calligrapher] completed in {duration_ms}ms (model_state={get_calligrapher_model_state()})")
         
         return {
             "svg": svg,
@@ -171,6 +208,8 @@ async def generate(request: GenerateRequest):
             "status": "success"
         }
     
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

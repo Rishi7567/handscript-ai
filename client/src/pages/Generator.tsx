@@ -36,7 +36,7 @@ const Generator: React.FC = () => {
   const [text, setText] = useState('The quick brown fox jumps over the lazy dog.');
   const [paperBg, setPaperBg] = useState<PaperBg>('lined');
   const [zoom, setZoom] = useState(100);
-  const [selectedStyleId, setSelectedStyleId] = useState<number>(0);
+  const [selectedStyleId, setSelectedStyleId] = useState<string | number>(0);
 
   const {
     generatedSVG,
@@ -47,6 +47,7 @@ const Generator: React.FC = () => {
     sliderSettings,
     setSliderSettings,
   } = useHandwritingStore();
+  const { styles: customStyles, fetchStyles } = useHandwritingStore();
   const addToast = useToastStore((s) => s.addToast);
 
   useEffect(() => {
@@ -54,6 +55,10 @@ const Generator: React.FC = () => {
       // Store handles unhealthy state; UI messaging happens on generate.
     });
   }, [checkMLService]);
+
+  useEffect(() => {
+    fetchStyles().catch(() => {});
+  }, [fetchStyles]);
 
   const handleTextChange = (val: string) => {
     setText(val);
@@ -172,15 +177,34 @@ const Generator: React.FC = () => {
               <label className="block text-sm font-medium text-ink mb-2">Handwriting style</label>
               <select
                 value={selectedStyleId}
-                onChange={(e) => setSelectedStyleId(Number(e.target.value))}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  // Keep as string if it's a custom/style_ ID, otherwise parse as number
+                  if (val.startsWith('custom_') || val.startsWith('style_')) {
+                    setSelectedStyleId(val);
+                  } else {
+                    setSelectedStyleId(Number(val));
+                  }
+                }}
                 aria-label="Handwriting style"
                 className="w-full px-4 py-2.5 rounded-xl border border-border bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
               >
-                {PREDEFINED_STYLES.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
+                <optgroup label="AI Styles">
+                  {PREDEFINED_STYLES.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </optgroup>
+                {customStyles.length > 0 && (
+                  <optgroup label="My Custom Styles">
+                    {customStyles.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        ✏️ {s.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
             </div>
 

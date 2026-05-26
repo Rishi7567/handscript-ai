@@ -43,7 +43,7 @@ interface HandwritingState {
   buildStyle: (name: string) => Promise<void>;
   fetchStyles: () => Promise<void>;
   deleteStyle: (id: string) => Promise<void>;
-  generateHandwriting: (text: string, styleId?: number) => Promise<void>;
+  generateHandwriting: (text: string, styleId?: string | number) => Promise<void>;
   clearGenerated: () => void;
   checkMLService: () => Promise<void>;
 }
@@ -264,7 +264,7 @@ export const useHandwritingStore = create<HandwritingState>((set, get) => ({
     }
   },
 
-  generateHandwriting: async (text, styleId = 0) => {
+  generateHandwriting: async (text, styleId: string | number = 0) => {
     set({ isGenerating: true });
 
     const { sliderSettings } = get();
@@ -277,7 +277,7 @@ export const useHandwritingStore = create<HandwritingState>((set, get) => ({
       // Send all slider settings to ML service
       const { data } = await api.post('/api/handwriting/generate', {
         text,
-        style_id: styleId,
+        style_id: String(styleId),
         bias,
         slant: sliderSettings.slant,
         size: sliderSettings.size,
