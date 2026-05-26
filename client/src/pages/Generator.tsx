@@ -4,23 +4,21 @@ import Slider from '../components/ui/Slider';
 import { useHandwritingStore } from '../stores/handwritingStore';
 import { useToastStore } from '../stores/toastStore';
 
-// Predefined styles from calligrapher model (0-14)
+// Predefined styles from calligrapher model (0-12 only — style files exist for these)
 const PREDEFINED_STYLES = [
-  { id: 0, name: 'Classic' },
-  { id: 1, name: 'Neat Print' },
-  { id: 2, name: 'Casual' },
-  { id: 3, name: 'Elegant Cursive' },
-  { id: 4, name: 'Quick Notes' },
-  { id: 5, name: 'Formal' },
-  { id: 6, name: 'Relaxed' },
-  { id: 7, name: 'Artistic' },
-  { id: 8, name: 'Modern' },
-  { id: 9, name: 'Traditional' },
-  { id: 10, name: 'Compact' },
-  { id: 11, name: 'Flowing' },
-  { id: 12, name: 'Bold' },
-  { id: 13, name: 'Light Touch' },
-  { id: 14, name: 'Signature' },
+  { id: 0,  name: 'Classic'        },
+  { id: 1,  name: 'Neat Print'     },
+  { id: 2,  name: 'Casual'         },
+  { id: 3,  name: 'Elegant Cursive'},
+  { id: 4,  name: 'Quick Notes'    },
+  { id: 5,  name: 'Formal'         },
+  { id: 6,  name: 'Relaxed'        },
+  { id: 7,  name: 'Artistic'       },
+  { id: 8,  name: 'Modern'         },
+  { id: 9,  name: 'Traditional'    },
+  { id: 10, name: 'Compact'        },
+  { id: 11, name: 'Flowing'        },
+  { id: 12, name: 'Bold'           },
 ];
 
 type PaperBg = 'plain' | 'lined' | 'cream' | 'dark';

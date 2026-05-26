@@ -5,19 +5,65 @@ import os
 import sys
 import re
 import threading
+import contextlib
 from typing import Optional
 
 # Add calligrapher directory to path
-CALLIGRAPHER_DIR = os.path.join(os.path.dirname(__file__), '..', 'calligrapher')
+CALLIGRAPHER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'calligrapher'))
+CALLIGRAPHER_STYLES_DIR = os.path.join(CALLIGRAPHER_DIR, 'styles')
 sys.path.insert(0, CALLIGRAPHER_DIR)
 
 # Suppress TensorFlow warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
+# The calligrapher model only has style files 0-12
+MAX_STYLE = 12
+
+# Characters the calligrapher model understands (from drawing.py alphabet)
+CALLIGRAPHER_ALPHABET = set(
+    '\x00 !"#\'(),-.0123456789:;?'
+    'ABCDEFGHIJKLMNOPRSTUVWYabcdefghijklmnopqrstuvwxyz'
+)
+
 _hand_instance = None
 _preload_lock = threading.Lock()
 _preload_thread: Optional[threading.Thread] = None
 _preload_error: Optional[str] = None
+
+
+def sanitize_text(text: str) -> str:
+    """
+    Remove or replace characters that the calligrapher model doesn't support.
+    Unsupported chars are replaced with a space so words don't merge together.
+    """
+    result = []
+    for ch in text:
+        if ch == '\n':
+            result.append(ch)        # keep newlines for line splitting
+        elif ch in CALLIGRAPHER_ALPHABET:
+            result.append(ch)
+        else:
+            result.append(' ')       # replace unsupported char with space
+    # Collapse multiple consecutive spaces into one
+    cleaned = re.sub(r' +', ' ', ''.join(result))
+    return cleaned.strip()
+
+
+@contextlib.contextmanager
+def _calligrapher_cwd():
+    """
+    Thread-safe context manager that temporarily changes the working directory
+    to CALLIGRAPHER_DIR so the model can load its relative-path style files.
+    Uses a per-thread lock to prevent races between concurrent requests.
+    """
+    with _preload_lock:
+        original_dir = os.getcwd()
+        os.chdir(CALLIGRAPHER_DIR)
+        try:
+            yield
+        finally:
+            os.chdir(original_dir)
+
 
 
 def get_hand():
@@ -34,7 +80,7 @@ def get_hand():
             print("Retrying Calligrapher.ai model load after a previous preload failure...")
             _preload_error = None
 
-        # Change to calligrapher directory for relative path imports
+        # Change to calligrapher directory so Hand() can load its checkpoints
         original_dir = os.getcwd()
         os.chdir(CALLIGRAPHER_DIR)
         try:
@@ -151,29 +197,37 @@ def generate_handwriting(
 ) -> str:
     """
     Generate handwritten SVG from text.
-    
+
     Args:
-        text: Text to convert to handwriting (max 75 chars per line)
-        style: Predefined style number (0-14)
+        text: Text to convert to handwriting
+        style: Predefined style number (0-12 — only 0-12 have .npy files)
         bias: Controls randomness (0.0=random, 1.0=deterministic)
         stroke_color: SVG stroke color
         stroke_width: SVG stroke width
         slant: Slant angle in degrees (-30 to 30)
         size: Size percentage (50 to 200)
         spacing: Letter spacing (0 to 100)
-    
+
     Returns:
         SVG string content
     """
     import tempfile
-    
+
     hand = get_hand()
-    
+
+    # Clamp style to valid range (only 0-12 have style .npy files)
+    style = max(0, min(MAX_STYLE, style))
+
+    # Strip characters the model doesn't support
+    safe_text = sanitize_text(text)
+    if not safe_text.strip():
+        safe_text = 'Hello'
+
     # Split text into lines (max 75 chars each)
     lines = []
-    for line in text.split('\n'):
+    for line in safe_text.split('\n'):
+        line = line.strip()
         while len(line) > 75:
-            # Find last space before 75 chars
             split_idx = line[:75].rfind(' ')
             if split_idx == -1:
                 split_idx = 75
@@ -181,25 +235,22 @@ def generate_handwriting(
             line = line[split_idx:].strip()
         if line:
             lines.append(line)
-    
+
     if not lines:
-        lines = [" "]
-    
+        lines = ['Hello']
+
     # Generate SVG to temp file
     with tempfile.NamedTemporaryFile(suffix='.svg', delete=False) as tmp:
         tmp_path = tmp.name
-    
+
     try:
-        # Change to calligrapher dir for style files
-        original_dir = os.getcwd()
-        os.chdir(CALLIGRAPHER_DIR)
-        
-        try:
-            biases = [bias] * len(lines)
-            styles = [style] * len(lines)
-            stroke_colors = [stroke_color] * len(lines)
-            stroke_widths = [stroke_width] * len(lines)
-            
+        biases = [bias] * len(lines)
+        styles = [style] * len(lines)
+        stroke_colors = [stroke_color] * len(lines)
+        stroke_widths = [stroke_width] * len(lines)
+
+        # Use the lock-protected cwd context to avoid concurrent-request races
+        with _calligrapher_cwd():
             hand.write(
                 filename=tmp_path,
                 lines=lines,
@@ -208,27 +259,24 @@ def generate_handwriting(
                 stroke_colors=stroke_colors,
                 stroke_widths=stroke_widths
             )
-        finally:
-            os.chdir(original_dir)
-        
+
         # Read SVG content
-        with open(tmp_path, 'r') as f:
+        with open(tmp_path, 'r', encoding='utf-8') as f:
             svg_content = f.read()
-        
+
         # Apply slider transforms (slant, size, spacing)
         svg_content = apply_svg_transforms(svg_content, slant, size, spacing)
-        
+
         return svg_content
-    
+
     finally:
-        # Cleanup temp file
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
 
 
 def get_available_styles() -> list:
-    """Return list of available predefined styles (0-14)"""
-    return list(range(15))
+    """Return list of available predefined styles (0-12)"""
+    return list(range(MAX_STYLE + 1))
 
 
 def get_model_state() -> str:
