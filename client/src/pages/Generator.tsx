@@ -294,21 +294,20 @@ const Generator: React.FC = () => {
               </div>
             </div>
 
-            {/* Paper — fixed A4 aspect ratio, scrollable if zoomed */}
+            {/* Paper — A4 min-height, grows with content, scrollable if zoomed */}
             <div className="overflow-auto rounded-2xl shadow-xl border border-border/60">
               <div
                 ref={previewRef}
                 style={{
                   backgroundColor: paper.bg,
-                  /* A4: width = whatever fits, height = width × A4_RATIO */
+                  /* A4-proportioned minimum, but grows if content is longer */
                   width: '100%',
-                  aspectRatio: `210 / 297`,
                   minWidth: '480px',
+                  minHeight: `calc(480px * ${A4_RATIO})`,
                   position: 'relative',
                   ...ruledStyle,
                   transform: `scale(${zoom / 100})`,
                   transformOrigin: 'top left',
-                  /* When zoomed, expand container to avoid clipping */
                   marginBottom: zoom !== 100 ? `calc(${A4_RATIO * 100}% * ${zoom / 100 - 1})` : undefined,
                 }}
               >
@@ -323,8 +322,8 @@ const Generator: React.FC = () => {
                   }}
                 />
 
-                {/* Page content */}
-                <div style={{ padding: '48px 48px 48px 72px', height: '100%' }}>
+                {/* Page content — never clips SVG */}
+                <div style={{ padding: '48px 48px 48px 72px', overflow: 'visible' }}>
                   {isGenerating ? (
                     /* Skeleton loading lines */
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', paddingTop: '8px' }}>
@@ -345,14 +344,12 @@ const Generator: React.FC = () => {
                       ))}
                     </div>
                   ) : generatedSVG ? (
-                    /* SVG fills the page width, height flows naturally */
+                    /* SVG: preserveAspectRatio keeps it proportional, width fills page */
                     <div
-                      style={{ color: inkColor, lineHeight: 0 }}
+                      style={{ color: inkColor, lineHeight: 0, overflow: 'visible' }}
                       dangerouslySetInnerHTML={{
                         __html: generatedSVG
-                          /* Make SVG fill the available width */
-                          .replace(/<svg /, '<svg style="width:100%;height:auto;display:block;overflow:visible;" ')
-                          /* Remove any fixed width/height attributes that fight the style */
+                          .replace(/<svg /, '<svg style="width:100%;height:auto;display:block;overflow:visible;" preserveAspectRatio="xMinYMin meet" ')
                           .replace(/\s(width|height)="[\d.]+"/g, ''),
                       }}
                     />
@@ -364,7 +361,7 @@ const Generator: React.FC = () => {
                         flexDirection: 'column',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        height: '60%',
+                        height: `calc(480px * ${A4_RATIO} - 96px)`,
                         color: paperBg === 'dark' ? 'rgba(232,226,217,0.3)' : 'rgba(0,0,0,0.2)',
                         textAlign: 'center',
                         gap: '12px',
