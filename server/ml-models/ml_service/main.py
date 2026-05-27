@@ -2,10 +2,12 @@
 ML Service - FastAPI Application
 Bridges Node.js backend with Python ML models (HWT + Calligrapher.ai)
 """
+import asyncio
 import os
 import base64
 import tempfile
 import time
+from functools import partial
 from typing import Optional
 from contextlib import asynccontextmanager
 
@@ -21,6 +23,7 @@ from calligrapher_wrapper import (
     preload_async as preload_calligrapher_async,
     get_model_state as get_calligrapher_model_state,
     get_preload_error as get_calligrapher_preload_error,
+    cache_stats as get_cache_stats,
 )
 from hwt_wrapper import extract_style_from_image, generate_hwt_handwriting, load_style, list_styles, delete_style, build_style_from_samples
 from compositor import compose_handwriting
@@ -139,79 +142,106 @@ async def warmup_calligrapher():
 async def generate(request: GenerateRequest):
     """
     Generate handwritten SVG from text.
-    
-    Dispatches to the appropriate backend:
-    - Numeric 0-14: Calligrapher.ai (LSTM model)
-    - custom_*: Glyph Compositor (user-drawn strokes)
-    - style_*: HWT Transformer (extracted style)
+
+    Routes by style_id prefix:
+      0-12      → Calligrapher.ai LSTM (parallel lines, LRU-cached)
+      custom_*  → Glyph Compositor  (instant, from canvas strokes)
+      style_*   → HWT Transformer   (extracted image style)
     """
     try:
-        t0 = time.perf_counter()
-        sid = request.style_id.strip()
+        t0          = time.perf_counter()
+        sid         = request.style_id.strip()
         lines_count = len(request.text.split('\n'))
+        loop        = asyncio.get_event_loop()
 
-        # --- Route 1: Custom style (from onboarding canvas strokes) ---
+        # ── Route 1: custom canvas style ──────────────────────────────────────
         if sid.startswith('custom_'):
             style_data = load_style(sid)
             if not style_data:
                 raise HTTPException(status_code=404, detail=f"Custom style {sid} not found")
-            samples = style_data.get('samples', [])
-            svg = compose_handwriting(
-                text=request.text,
-                samples=samples,
-                slant=request.slant,
-                size=request.size,
-                spacing=request.spacing,
-                ink_weight=request.ink_weight,
-                stroke_color=request.stroke_color,
+            # compositor is pure Python / CPU — run in executor to stay async
+            svg = await loop.run_in_executor(
+                None,
+                partial(
+                    compose_handwriting,
+                    text=request.text,
+                    samples=style_data.get('samples', []),
+                    slant=request.slant,
+                    size=request.size,
+                    spacing=request.spacing,
+                    ink_weight=request.ink_weight,
+                    stroke_color=request.stroke_color,
+                )
             )
-            duration_ms = round((time.perf_counter() - t0) * 1000, 2)
-            print(f"/generate [compositor] completed in {duration_ms}ms")
+            ms = round((time.perf_counter() - t0) * 1000, 2)
+            print(f"/generate [compositor] {ms}ms")
             return {"svg": svg, "lines_count": lines_count, "status": "success"}
 
-        # --- Route 2: HWT extracted style ---
+        # ── Route 2: HWT extracted style ──────────────────────────────────────
         if sid.startswith('style_'):
-            svg = generate_hwt_handwriting(style_id=sid, text=request.text)
-            duration_ms = round((time.perf_counter() - t0) * 1000, 2)
-            print(f"/generate [hwt] completed in {duration_ms}ms")
+            svg = await loop.run_in_executor(
+                None,
+                partial(generate_hwt_handwriting, style_id=sid, text=request.text)
+            )
+            ms = round((time.perf_counter() - t0) * 1000, 2)
+            print(f"/generate [hwt] {ms}ms")
             return {"svg": svg, "lines_count": lines_count, "status": "success"}
 
-        # --- Route 3: Predefined Calligrapher.ai style (0-14) ---
+        # ── Route 3: Calligrapher.ai predefined style (0-12) ──────────────────
         try:
             style_num = int(sid)
         except ValueError:
             style_num = 0
-        style_num = max(0, min(14, style_num))
 
         model_state = get_calligrapher_model_state()
-        if model_state in {"idle", "error"}:
+        if model_state in {'idle', 'error'}:
             preload_calligrapher_async()
 
         stroke_width = max(1, min(4, 1 + int(request.ink_weight / 33)))
-        
-        svg = generate_handwriting(
-            text=request.text,
-            style=style_num,
-            bias=request.bias,
-            stroke_color=request.stroke_color,
-            stroke_width=stroke_width,
-            slant=request.slant,
-            size=request.size,
-            spacing=request.spacing
+
+        # Run the CPU-bound TF inference in a thread pool executor so the
+        # event loop (and other requests) are never blocked.
+        svg = await loop.run_in_executor(
+            None,
+            partial(
+                generate_handwriting,
+                text=request.text,
+                style=style_num,
+                bias=request.bias,
+                stroke_color=request.stroke_color,
+                stroke_width=stroke_width,
+                slant=request.slant,
+                size=request.size,
+                spacing=request.spacing,
+            )
         )
-        duration_ms = round((time.perf_counter() - t0) * 1000, 2)
-        print(f"/generate [calligrapher] completed in {duration_ms}ms (model_state={get_calligrapher_model_state()})")
-        
-        return {
-            "svg": svg,
-            "lines_count": lines_count,
-            "status": "success"
-        }
-    
+
+        ms = round((time.perf_counter() - t0) * 1000, 2)
+        print(f"/generate [calligrapher] {ms}ms  state={get_calligrapher_model_state()}")
+
+        return {"svg": svg, "lines_count": lines_count, "status": "success"}
+
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/cache/stats")
+async def cache_stats_endpoint():
+    """Return SVG LRU cache statistics."""
+    return get_cache_stats()
+
+
+@app.delete("/cache")
+async def clear_cache():
+    """Flush the SVG LRU cache (useful after model changes)."""
+    from calligrapher_wrapper import _svg_cache, _cache_lock
+    with _cache_lock:
+        count = len(_svg_cache)
+        _svg_cache.clear()
+    return {"cleared": count, "status": "ok"}
+
 
 
 @app.get("/styles/available")
