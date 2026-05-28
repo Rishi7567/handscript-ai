@@ -101,7 +101,8 @@ def cache_stats() -> dict:
 
 # ── Model singleton ───────────────────────────────────────────────────────────
 _hand_instance = None
-_model_lock = threading.Lock()
+_model_lock = threading.Lock()   # guards _hand_instance (heavy load)
+_state_lock = threading.Lock()   # guards _preload_error and _preload_thread
 _preload_error: Optional[str] = None
 _preload_thread: Optional[threading.Thread] = None
 
@@ -300,24 +301,28 @@ def get_available_styles() -> list:
 def get_model_state() -> str:
     if _hand_instance is not None:
         return 'ready'
-    if _preload_error is not None:
-        return 'error'
-    if _preload_thread is not None and _preload_thread.is_alive():
-        return 'warming'
+    with _state_lock:
+        if _preload_error is not None:
+            return 'error'
+        if _preload_thread is not None and _preload_thread.is_alive():
+            return 'warming'
     return 'idle'
 
 
 def get_preload_error() -> Optional[str]:
-    return _preload_error
+    with _state_lock:
+        return _preload_error
 
 
 def preload_async() -> None:
-    global _preload_thread, _preload_error
-    with _model_lock:
-        if _hand_instance is not None:
-            return
+    global _preload_thread
+    if _hand_instance is not None:
+        return
+    with _state_lock:
         if _preload_thread is not None and _preload_thread.is_alive():
             return
+        # clear previous error so a retry is possible
+        global _preload_error
         _preload_error = None
 
         def _run():
@@ -325,13 +330,13 @@ def preload_async() -> None:
             try:
                 preload()
             except Exception as exc:
-                _preload_error = str(exc)
+                with _state_lock:
+                    _preload_error = str(exc)
                 print(f"[calligrapher] preload failed: {exc}")
 
-        _preload_thread = threading.Thread(
-            target=_run, name='callig-preload', daemon=True,
-        )
-        _preload_thread.start()
+        t = threading.Thread(target=_run, name='callig-preload', daemon=True)
+        _preload_thread = t
+        t.start()
 
 
 def preload() -> None:
