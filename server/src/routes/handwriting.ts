@@ -1,13 +1,25 @@
-/**
- * Handwriting API Routes
- * Connects Express to Python ML service
- */
-
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
+import rateLimit from 'express-rate-limit';
 import { mlService } from '../services/mlService';
+import { requireAuth, optionalAuth } from '../middleware/auth';
+import { logger } from '../utils/logger';
 
 const router = Router();
+
+// 30 generations per minute per IP
+const generateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  message: { error: 'Too many generation requests. Please slow down.' },
+});
+
+// 10 uploads per minute per IP
+const uploadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  message: { error: 'Too many upload requests. Please slow down.' },
+});
 
 // Configure multer for image uploads (memory storage)
 const upload = multer({
@@ -59,7 +71,7 @@ router.post('/warmup', async (_req: Request, res: Response) => {
  * Generate handwriting SVG from text
  * Body: { text: string, style_id?: number, bias?: number, custom_style?: object }
  */
-router.post('/generate', async (req: Request, res: Response) => {
+router.post('/generate', generateLimiter, optionalAuth, async (req: Request, res: Response) => {
   try {
     const { text, style_id, bias, slant, size, spacing, ink_weight, custom_style } = req.body;
 
@@ -84,7 +96,7 @@ router.post('/generate', async (req: Request, res: Response) => {
 
     res.json(result);
   } catch (error) {
-    console.error('Generate error:', error);
+    logger.error('Generate error', { error });
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Generation failed',
     });
@@ -96,7 +108,7 @@ router.post('/generate', async (req: Request, res: Response) => {
  * Build a custom style from user-drawn stroke samples (Onboarding flow)
  * Body: { name: string, samples: CharSample[] }
  */
-router.post('/styles/build', async (req: Request, res: Response) => {
+router.post('/styles/build', requireAuth, async (req: Request, res: Response) => {
   try {
     const { name, samples } = req.body;
 
@@ -111,7 +123,7 @@ router.post('/styles/build', async (req: Request, res: Response) => {
     const result = await mlService.buildStyle(name.trim(), samples);
     res.json(result);
   } catch (error) {
-    console.error('Build style error:', error);
+    logger.error('Build style error', { error });
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to build style',
     });
@@ -123,7 +135,7 @@ router.post('/styles/build', async (req: Request, res: Response) => {
  * Extract handwriting style from uploaded image
  * Multipart form: file (image)
  */
-router.post('/extract-style', upload.single('file'), async (req: Request, res: Response) => {
+router.post('/extract-style', uploadLimiter, optionalAuth, upload.single('file'), async (req: Request, res: Response) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'Image file is required' });
@@ -136,7 +148,7 @@ router.post('/extract-style', upload.single('file'), async (req: Request, res: R
 
     res.json(result);
   } catch (error) {
-    console.error('Extract style error:', error);
+    logger.error('Extract style error', { error });
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Style extraction failed',
     });
@@ -152,7 +164,7 @@ router.get('/styles', async (_req: Request, res: Response) => {
     const styles = await mlService.getStyles();
     res.json({ styles });
   } catch (error) {
-    console.error('Get styles error:', error);
+    logger.error('Get styles error', { error });
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to get styles',
     });
@@ -172,7 +184,7 @@ router.get('/styles/:id', async (req: Request, res: Response) => {
     if (error instanceof Error && error.message.includes('not found')) {
       return res.status(404).json({ error: 'Style not found' });
     }
-    console.error('Get style error:', error);
+    logger.error('Get style error', { error });
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to get style',
     });
@@ -183,7 +195,7 @@ router.get('/styles/:id', async (req: Request, res: Response) => {
  * DELETE /api/handwriting/styles/:id
  * Delete a style
  */
-router.delete('/styles/:id', async (req: Request, res: Response) => {
+router.delete('/styles/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const styleId = req.params.id as string;
     await mlService.deleteStyle(styleId);
@@ -192,7 +204,7 @@ router.delete('/styles/:id', async (req: Request, res: Response) => {
     if (error instanceof Error && error.message.includes('not found')) {
       return res.status(404).json({ error: 'Style not found' });
     }
-    console.error('Delete style error:', error);
+    logger.error('Delete style error', { error });
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to delete style',
     });
