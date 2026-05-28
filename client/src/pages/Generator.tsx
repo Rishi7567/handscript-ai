@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import DOMPurify from 'dompurify';
 import Button from '../components/ui/Button';
 import Slider from '../components/ui/Slider';
 import { useHandwritingStore } from '../stores/handwritingStore';
@@ -348,9 +349,12 @@ const Generator: React.FC = () => {
                     <div
                       style={{ color: inkColor, lineHeight: 0, overflow: 'visible' }}
                       dangerouslySetInnerHTML={{
-                        __html: generatedSVG
-                          .replace(/<svg /, '<svg style="width:100%;height:auto;display:block;overflow:visible;" preserveAspectRatio="xMinYMin meet" ')
-                          .replace(/\s(width|height)="[\d.]+"/g, ''),
+                        __html: DOMPurify.sanitize(
+                          generatedSVG
+                            .replace(/<svg /, '<svg style="width:100%;height:auto;display:block;overflow:visible;" preserveAspectRatio="xMinYMin meet" ')
+                            .replace(/\s(width|height)="[\d.]+"/g, ''),
+                          { USE_PROFILES: { svg: true, svgFilters: true } }
+                        ),
                       }}
                     />
                   ) : (
