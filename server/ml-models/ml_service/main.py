@@ -15,6 +15,11 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+# ── Constants ─────────────────────────────────────────────────────────────────
+INFERENCE_TIMEOUT_SECONDS = 60
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+ALLOWED_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'}
+
 # Import wrappers
 from calligrapher_wrapper import (
     generate_handwriting,
@@ -103,12 +108,18 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS middleware
+# CORS — restrict to Express backend only; never open to the internet
+_raw_origins = os.environ.get(
+    "ML_ALLOWED_ORIGINS",
+    "http://127.0.0.1:5000,http://localhost:5000"
+)
+_allowed_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure for production
+    allow_origins=_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -159,30 +170,41 @@ async def generate(request: GenerateRequest):
             style_data = load_style(sid)
             if not style_data:
                 raise HTTPException(status_code=404, detail=f"Custom style {sid} not found")
-            # compositor is pure Python / CPU — run in executor to stay async
-            svg = await loop.run_in_executor(
-                None,
-                partial(
-                    compose_handwriting,
-                    text=request.text,
-                    samples=style_data.get('samples', []),
-                    slant=request.slant,
-                    size=request.size,
-                    spacing=request.spacing,
-                    ink_weight=request.ink_weight,
-                    stroke_color=request.stroke_color,
+            try:
+                svg = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        partial(
+                            compose_handwriting,
+                            text=request.text,
+                            samples=style_data.get('samples', []),
+                            slant=request.slant,
+                            size=request.size,
+                            spacing=request.spacing,
+                            ink_weight=request.ink_weight,
+                            stroke_color=request.stroke_color,
+                        )
+                    ),
+                    timeout=INFERENCE_TIMEOUT_SECONDS,
                 )
-            )
+            except asyncio.TimeoutError:
+                raise HTTPException(status_code=504, detail="Compositor timed out")
             ms = round((time.perf_counter() - t0) * 1000, 2)
             print(f"/generate [compositor] {ms}ms")
             return {"svg": svg, "lines_count": lines_count, "status": "success"}
 
         # ── Route 2: HWT extracted style ──────────────────────────────────────
         if sid.startswith('style_'):
-            svg = await loop.run_in_executor(
-                None,
-                partial(generate_hwt_handwriting, style_id=sid, text=request.text)
-            )
+            try:
+                svg = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        partial(generate_hwt_handwriting, style_id=sid, text=request.text)
+                    ),
+                    timeout=INFERENCE_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                raise HTTPException(status_code=504, detail="HWT model timed out")
             ms = round((time.perf_counter() - t0) * 1000, 2)
             print(f"/generate [hwt] {ms}ms")
             return {"svg": svg, "lines_count": lines_count, "status": "success"}
@@ -199,22 +221,26 @@ async def generate(request: GenerateRequest):
 
         stroke_width = max(1, min(4, 1 + int(request.ink_weight / 33)))
 
-        # Run the CPU-bound TF inference in a thread pool executor so the
-        # event loop (and other requests) are never blocked.
-        svg = await loop.run_in_executor(
-            None,
-            partial(
-                generate_handwriting,
-                text=request.text,
-                style=style_num,
-                bias=request.bias,
-                stroke_color=request.stroke_color,
-                stroke_width=stroke_width,
-                slant=request.slant,
-                size=request.size,
-                spacing=request.spacing,
+        try:
+            svg = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    partial(
+                        generate_handwriting,
+                        text=request.text,
+                        style=style_num,
+                        bias=request.bias,
+                        stroke_color=request.stroke_color,
+                        stroke_width=stroke_width,
+                        slant=request.slant,
+                        size=request.size,
+                        spacing=request.spacing,
+                    )
+                ),
+                timeout=INFERENCE_TIMEOUT_SECONDS,
             )
-        )
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="Calligrapher model timed out")
 
         ms = round((time.perf_counter() - t0) * 1000, 2)
         print(f"/generate [calligrapher] {ms}ms  state={get_calligrapher_model_state()}")
@@ -282,33 +308,37 @@ async def build_style(request: BuildStyleRequest):
 
 @app.post("/extract-style", response_model=ExtractStyleResponse)
 async def extract_style(file: UploadFile = File(...)):
-    """
-    Extract handwriting style from an uploaded image.
-    
-    Uses HWT model to analyze handwriting and create a style embedding.
-    """
-    # Validate file type
-    if not file.content_type.startswith('image/'):
+    """Extract handwriting style from an uploaded image using the HWT model."""
+    # Validate MIME type
+    if not file.content_type or not file.content_type.startswith('image/'):
         raise HTTPException(status_code=400, detail="File must be an image")
-    
+
+    # Validate file extension
+    filename = file.filename or ''
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type. Allowed: {', '.join(ALLOWED_EXTENSIONS)}")
+
+    # Read entire content first so we can enforce the size cap
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="File too large (max 10 MB)")
+
+    tmp_path: Optional[str] = None
     try:
-        # Save uploaded file temporarily
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp:
-            content = await file.read()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
             tmp.write(content)
             tmp_path = tmp.name
-        
-        try:
-            # Extract style
-            result = extract_style_from_image(tmp_path)
-            return result
-        finally:
-            # Cleanup
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-    
+
+        result = extract_style_from_image(tmp_path)
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 @app.post("/extract-style-base64", response_model=ExtractStyleResponse)
@@ -319,28 +349,30 @@ async def extract_style_base64(data: dict):
     if 'image' not in data:
         raise HTTPException(status_code=400, detail="Missing 'image' field")
     
+    tmp_path: Optional[str] = None
     try:
-        # Decode base64
         image_data = data['image']
         if ',' in image_data:
             image_data = image_data.split(',')[1]
-        
+
         image_bytes = base64.b64decode(image_data)
-        
-        # Save to temp file
+
+        if len(image_bytes) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Image too large (max 10 MB)")
+
         with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp:
             tmp.write(image_bytes)
             tmp_path = tmp.name
-        
-        try:
-            result = extract_style_from_image(tmp_path)
-            return result
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-    
+
+        result = extract_style_from_image(tmp_path)
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 @app.get("/styles", response_model=list[StyleInfo])
