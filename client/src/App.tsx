@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './stores/authStore';
 import Header from './components/layout/Header';
 import ToastContainer from './components/ui/Toast';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import Landing from './pages/Landing';
 import AuthCallback from './pages/AuthCallback';
 import Onboarding from './pages/Onboarding';
@@ -18,6 +19,7 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
 function App() {
   return (
     <BrowserRouter>
+      <ErrorBoundary>
       <div className="min-h-screen bg-paper font-sans">
         <Header />
         <Routes>
@@ -45,6 +47,7 @@ function App() {
         </Routes>
         <ToastContainer />
       </div>
+      </ErrorBoundary>
     </BrowserRouter>
   );
 }
